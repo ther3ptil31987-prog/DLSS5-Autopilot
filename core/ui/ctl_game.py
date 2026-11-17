@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time as _time
 import traceback
 import webbrowser
 from pathlib import Path
@@ -81,6 +82,10 @@ def last_log_write(install_dir) -> float:
             names.append(extra)
         from .. import remix as _rx
         names.append(d / getattr(_rx, "LOG", "rtx-remix/logs/remix-dxvk.log"))
+        # the standalone add-on's own log, when no other folder shares it (#744)
+        if str((diagnose._manifest(d) or {}).get("path") or "") == "standalone" \
+                and not diagnose.chain._other_standalone(d):
+            names.append(diagnose.model.STANDALONE_LOG)
     except Exception:
         pass
     for f in names:
@@ -175,9 +180,24 @@ def fault_in_this_folder(crash, install_dir) -> bool:
 # OptiScaler's own unload. A process that faults does not write it: Windows
 # ends it without running the unload.
 _OPTI_UNLOAD = ("DLL_PROCESS_DETACH", "Unloading OptiScaler")
+# The standalone add-on's: the game destroying its graphics device. A clean
+# exit writes "clean process shutdown" after it; a fault leaves this last.
+_SA_CLOSING = ("standalone session ending",)
 # A fault this long after the log's last write still belongs to those lines
 # (#289: one second). Longer, or before it, and the log is about something else.
 _CLOSING_WINDOW_S = 30
+
+
+def waiting_verdict(rep) -> bool:
+    """A verdict that only asks for one more launch ("play once and check
+    again"): the logs had nothing yet, which a crash in the same session
+    answers. Read by the game page and the watcher alike (#748)."""
+    return str(getattr(rep, "verdict", "") or "").endswith("play once and check again.")
+
+
+def crashed_waiting(mod: str) -> str:
+    return ("ReShade loaded, and the game crashed before the add-on got going - Windows recorded the fault"
+            + (f" in {mod}." if mod else "."))
 
 
 def fault_while_closing(install_dir, crash=None) -> bool:
@@ -204,9 +224,19 @@ def fault_while_closing(install_dir, crash=None) -> bool:
     """
     d = Path(install_dir)
     try:
-        if str((diagnose._manifest(d) or {}).get("path") or "") != "optiscaler":
+        route = str((diagnose._manifest(d) or {}).get("path") or "")
+        if route == "standalone":
+            # #744: the standalone add-on writes its own log, outside the
+            # folder; "session ending" is the game tearing its device down.
+            # One file for every game: only this folder's when it is the
+            # only standalone install.
+            if diagnose.chain._other_standalone(d):
+                return False
+            f = diagnose.model.STANDALONE_LOG
+        elif route == "optiscaler":
+            f = diagnose._opti_log(d) or d / "OptiScaler.log"
+        else:
             return False
-        f = diagnose._opti_log(d) or d / "OptiScaler.log"
         # Windows gives the fault in whole seconds and the file's time has a
         # fraction: a fault in the same second as the last write reads as
         # up to a second BEFORE it.
@@ -220,14 +250,17 @@ def fault_while_closing(install_dir, crash=None) -> bool:
     except (OSError, TypeError, ValueError):
         return False
     last = lines[-4:]
+    if route == "standalone":
+        return any(k in ln for ln in last for k in _SA_CLOSING)
     if any(k in ln for ln in last for k in _OPTI_UNLOAD):
         return True
     return any("TryDestroyNGXParameters" in ln for ln in last) \
         and any("ReleaseFeature" in ln for ln in lines[-40:])
 
 
-CLOSING_FAULT_NOTE = ("        OptiScaler.log ends with the game releasing its DLSS resources or OptiScaler "
-                      "unloading - what the log shows when a game is on its way out - and Windows recorded the fault within "
+CLOSING_FAULT_NOTE = ("        OptiScaler's log or the standalone add-on's ends with the game releasing its DLSS "
+                      "resources, tearing its graphics device down, or OptiScaler unloading - what the log shows when a game is on its way out - and "
+                      "Windows recorded the fault within "
                       "seconds of that. It is read as a fault from closing, after the session, and does not "
                       "count against the result.")
 
@@ -289,12 +322,18 @@ class GameControl:
         self._defaults_for = None
         self._forget_last_session()
 
+    def forget_diagnosis(self) -> None:
+        """The last answer and the fault it read, once the folder changed."""
+        self._last_diag = None
+        self._last_crash = None
+
     def _forget_last_session(self) -> None:
         self._last_diag = None
         self._last_crash = None
         self._tune = None
         self._measured = None
         self._measured_rows = None
+        self._card_measured = None
         self._noted_routes = set()
         self.result = None
         self.seen_exe = None
@@ -308,7 +347,7 @@ class GameControl:
         return {
             "provider": 3, "renodx": AUTO, "dlssnr": AUTO, "dlss": AUTO, "dlssd": DLSSD_KEEP,
             "keep_dlss": True, "workres": 100, "preset": 0, "hdr": -1, "nr_preset": 0,
-            "nr_style": 0, "fg": False, "feeder": "stable", "opti_build": "",
+            "nr_style": 0, "nr_passes": 0, "fg": False, "feeder": "stable", "opti_build": "",
             "dxvk": False, "mfg": False, "vr": False, "remix_swap": swapped, "gpu_pref": True,
             "opti_proxy": "", "reshade_proxy": "", "own_fg": "",
         }
@@ -410,7 +449,11 @@ class GameControl:
         self.settings["dxvk"] = extra.get("dxvk", False)
         self.seen_exe = extra.get("seen")
         self._why_full = str(sup.reason or "")
-        tier = gpu.tier_note(self._sm())
+        try:
+            # A GTX 16 is sm 75 and must not read "RTX 20/30 ... works"
+            tier = None if gpu.no_dlss_here() else gpu.tier_note(self._sm())
+        except Exception:
+            tier = gpu.tier_note(self._sm())
         self._tier_full = str(tier or "")
         self.write("")
         self.write(f"=== {g.name} ===", "head")
@@ -475,8 +518,13 @@ class GameControl:
         try:
             card, _sm = gpu.detect()
         except Exception:
-            card = None
+            card = _sm = None
         if card:
+            # A card that is NVIDIA's and still cannot run DLSS (#770: a GTX
+            # 1650 was told "RTX 20/30 ... works, but heavy").
+            no_dlss = gpu.no_dlss_here()
+            if no_dlss:
+                self.write(f"!! {no_dlss}", "warn")
             return
         vendor = None
         try:
@@ -656,7 +704,8 @@ class GameControl:
         g, r = self.game, self.route
         opti, feeder, remix = r == dlss.OPTI, r == dlss.FEEDER, r == dlss.REMIX
         api = g.api if g else ""
-        reshade_routes = r in (dlss.NATIVE, dlss.BRIDGE, dlss.FEEDER, dlss.RENODX, dlss.UPSTREAM, dlss.STANDALONE)
+        reshade_routes = r in (dlss.NATIVE, dlss.BRIDGE, dlss.FEEDER, dlss.RENODX, dlss.UPSTREAM, dlss.STANDALONE,
+                               dlss.UPLIFT)
         # Only the rule asked is evaluated. This is asked for every row on
         # every redraw (and by apply_route and opts()); building the whole
         # table each time ran every rule, the disk-reading ones included,
@@ -677,16 +726,18 @@ class GameControl:
             # With 'keep the game's own' on and the game's file beside the
             # executable, the install leaves that file alone and never reads
             # this choice; a game with none still gets the build picked here.
-            "dlss": lambda: r not in (dlss.UPSTREAM, dlss.REMIX) and not (
+            "dlss": lambda: r not in (dlss.UPSTREAM, dlss.REMIX, dlss.UPLIFT) and not (
                 bool(self.settings.get("keep_dlss", True)) and self.shown_setting("keep_dlss")
                 and bool((getattr(self, "entry", {}) or {}).get("dlss_beside"))),
-            "keep_dlss": lambda: r not in (dlss.UPSTREAM, dlss.REMIX) and (g is None or g.bitness != 32),
+            "keep_dlss": lambda: r not in (dlss.UPSTREAM, dlss.REMIX, dlss.UPLIFT) and (g is None or g.bitness != 32),
             "dlssd": lambda: self.has_rr() and reshade_routes,
             "workres": lambda: self.work_applies(),
             "preset": lambda: feeder,
             "hdr": lambda: feeder,
             "nr_preset": lambda: opti,
             "nr_style": lambda: opti,
+            # only the pre-SR forks read [DlssNr] Passes (#957)
+            "nr_passes": lambda: opti and optiscaler.is_presr(str(self.settings.get("opti_build") or "")),
             "fg": lambda: opti and api == "DX12",
             "feeder": lambda: feeder,
             "opti_build": lambda: opti,
@@ -938,6 +989,8 @@ class GameControl:
             return [(k, "auto" if k == 0 else v.lower()) for k, v in optiscaler.NR_PRESETS.items()]
         if key == "nr_style":
             return [(k, v.lower()) for k, v in optiscaler.NR_STYLES.items()]
+        if key == "nr_passes":
+            return list(optiscaler.NR_PASSES.items())
         if key == "feeder":
             return [("stable", "newest release"), ("pre", "newest pre-release")] + [
                 (t, t + ("  (pre-release)" if pre or "beta" in t.lower() else "")) for t, pre in self.feeder_tags]
@@ -1013,6 +1066,11 @@ class GameControl:
                     nr["Preset"] = s["nr_preset"]
                 if s["nr_style"]:
                     nr["Style"] = s["nr_style"]
+                # auto is written as 1 on these builds: OptiScaler.ini is kept
+                # across installs, and a Passes=3 left in it would go on
+                # costing three times while the page says auto (gate 2.1.0)
+                if vis("nr_passes"):
+                    nr["Passes"] = s.get("nr_passes") or 1
             extra = self.profile_extra
             # A profile's own feed and model dials (depth, say) go to the
             # route that reads them, and to the route shown only: the feed
@@ -1174,6 +1232,10 @@ class GameControl:
         if g is not None:
             self.verdicts.pop(str(g.install_dir), None)
             prefs.set_("last_verdicts", self.verdicts)
+        if here:
+            # the diagnosis described the install this one replaced: a report
+            # made now must not carry it under the new route (#761's class)
+            self.forget_diagnosis()
         self.watch_refresh()
         self.check_stale()
         if not here:
@@ -1411,9 +1473,39 @@ class GameControl:
         self.write(f"> uninstalled{'' if here or g is None else f' {g.name}'} ({len(items)} items)", "ok")
         self.watch_refresh()
         if here:
+            # The last diagnosis described files that are gone now: a report
+            # made after this must not carry it (#761 printed "Working."
+            # over an empty folder). result is set again on the next line.
+            self._forget_last_session()
             self._defaults_for = None
             self.result = {"kind": "removed", "title": "uninstalled - the game's own files are back"}
             self.steps = []
+        # The one thing an uninstall can leave behind, said where it is seen:
+        # the log drawer is closed after an uninstall (gate 2.0.9).
+        try:
+            from .. import vulkan
+            left = vulkan.machine_leftover() \
+                if prefs.vulkan_games_or_none() == [] else []
+        except Exception:
+            left = []
+        # The sentence itself is in the uninstall's own log lines; here it
+        # only has to be seen - as a warning on the card (amber, not the
+        # green of a clean uninstall), or in the status line when another
+        # game is on the page.
+        if left:
+            text = installer.machine_leftover_text(left)
+            if here:
+                self.result = {"kind": "removed",
+                               "title": "uninstalled - the game's own files are back",
+                               "warnings": [text]}
+            else:
+                # One line, so the instruction is not what gets cut off.
+                try:
+                    self.shell.status("ReShade's Vulkan layer is still "
+                                      "registered for all users - start this "
+                                      "tool once as administrator to remove it")
+                except Exception:
+                    pass
         self.check_stale()
         self.refresh("game")
         self.refresh("library", soft=True)
@@ -1707,6 +1799,8 @@ class GameControl:
             s["hdr"] = number(feed.get("hdr", -1), -1)
         if vis("nr_style") and number(nr.get("Style", 0), 0) in optiscaler.NR_STYLES:
             s["nr_style"] = number(nr.get("Style", 0), 0)
+        if number(nr.get("Passes", 0), 0) in optiscaler.NR_PASSES:
+            s["nr_passes"] = number(nr.get("Passes", 0), 0)
         if vis("provider") and opt.provider in reshade_ini.PROVIDERS:
             s["provider"] = opt.provider
         # dxvk before the proxy and keep_dlss before dlss: each decides
@@ -1912,7 +2006,9 @@ class GameControl:
         self.seen_exe = self._seen_other_exe_for(g)
         working = rep.verdict.startswith("Working")
         self.result = {"kind": "diagnosis", "ok": working, "ran": bool(rep.ran), "title": rep.verdict,
+                       "at": _time.time(),
                        "findings": [(f.level, f.title) for f in rep.findings if f.level in ("bad", "warn")][:3]}
+        self._card_measured = measured
         self._record_verdict(rep, measured)
         if not working:
             self.what_next(rep)
@@ -2010,11 +2106,23 @@ class GameControl:
             return
         working = str(getattr(d, "verdict", "")).startswith("Working")
         never_ran = bool(getattr(d, "never_ran", False))
-        if not working and not never_ran:
+        pending = waiting_verdict(d)
+        if not working and not never_ran and not pending:
             return
         if not crash_counts(crash, g.install_dir):
             return
         mod = str(getattr(crash, "module", "") or "")
+        if pending and not never_ran:
+            # #748: "play once and check again" over a game that crashed 2 s
+            # after ReShade's last line - there was nothing left to play.
+            d.verdict = crashed_waiting(mod)
+            # "play once and check again" goes with the verdict that said it
+            d.findings = [f for f in d.findings if "play once and check again" not in f"{f.title} {f.detail}"]
+            d.add(diagnose.BAD, f"Windows recorded {getattr(crash, 'exe', 'the game')} faulting"
+                  + (f" in {mod}." if mod else "."),
+                  "ReShade had loaded, and the game crashed before the add-on wrote a line of its own.")
+            self._reprint_verdict(d)
+            return
         if never_ran:
             if not fault_in_this_folder(crash, g.install_dir):
                 return
@@ -2293,6 +2401,12 @@ class GameControl:
                     ("step", "F10 flips between the processed and the original picture"),
                     ("note", "a lower in-game resolution than your monitor = DLSS super resolution; same "
                              "resolution = DLAA")]
+        elif route == dlss.UPLIFT:
+            out += [("step", f"press {key} to open reshade, then the GITC Uplift tab"),
+                    ("step", "tick Enable - the card at the top of the tab says whether it is working"),
+                    ("step", "NR stage: Present works in every game; After DLSS runs before the hud in "
+                             "64-bit d3d11/d3d12/vulkan games that use dlss"),
+                    ("note", "resolution and pass count in the same tab are the fps levers")]
         elif route == dlss.UPSTREAM:
             out += [("note", "reshade's overlay will say 'no .fx files found' - normal on this route"),
                     ("step", "keep the game's own DLSS ON - the network runs before it"),

@@ -2,7 +2,7 @@ r"""DLSS 5 Autopilot - entry point.
 
 GUI:            dlss5-autopilot.exe
 Command line:   dlss5-autopilot.exe "D:\Games\Game" [--check | --remove]
-                                                    [--route native|upstream|optiscaler|renodx|bridge|feeder|standalone|remix]
+                                                    [--route native|upstream|optiscaler|renodx|bridge|feeder|standalone|uplift|remix]
                                                     [--dxvk | --no-dxvk] [--remix-swap] [--vr]
                                                     [--no-gpu-pref]
                                                     [--opti-build y4my4my4m|wilsjo2|wilsjo2-mfg|janblade]
@@ -172,6 +172,10 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
         # 2.0.5). The same check, the same words.
         refused = (optiscaler.card_refusal(opti_build, sm)
                    if ok and sup.recommended == installer.OPTI else "")
+        if ok and not refused:
+            # the card no route runs on (#770), refused by install() too
+            from core import gpu as _gpu
+            refused = _gpu.no_dlss_here() or ""
         if ok and not refused and own_fg:
             refused = installer._own_fg_refusal(g.install_dir, installer.Options(
                 path=sup.recommended, own_fg=own_fg))
@@ -232,6 +236,10 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
     if sup.recommended == dlss.REMIX or route == dlss.REMIX:
         print("In game: press Alt+X, then 'Developer Settings Menu', then the "
               "Post-Processing tab: 'Enable Neural Uplift (DLSS-NR)'.")
+    elif route == dlss.UPLIFT:
+        print(f"In game: press {reshade_ini.overlay_key_name()}, open the GITC "
+              f"Uplift tab and tick Enable - it starts switched off. The card "
+              f"at the top of the tab says whether it is working.")
     elif sup.recommended == dlss.FEEDER and g.bitness == 32:
         # See the matching note in gui.py: the DLSS 5 page is in the game's
         # own overlay and drives the 64-bit helper; the helper's separate
@@ -256,6 +264,19 @@ def cli(target: Path, remove: bool, check: bool, route: str = "",
 
 def main() -> int:
     args = list(sys.argv[1:])
+    # --remove as administrator with no Vulkan install left also takes off
+    # the all-users Vulkan layer an earlier uninstall could not - the
+    # clean-up the window does at start. Only on --remove: --check looks
+    # and writes nothing.
+    if "--remove" in args:
+        try:
+            from core import prefs, vulkan
+            if vulkan.cleanup_machine(prefs.vulkan_games_or_none()):
+                _console()
+                print("removed: our ReShade Vulkan layer from the all-users "
+                      "list (no Vulkan install left)")
+        except Exception:
+            pass
     route = ""
     if "--route" in args and args.index("--route") + 1 < len(args):
         route = args[args.index("--route") + 1]

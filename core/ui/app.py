@@ -40,6 +40,24 @@ JOB_ENDS = frozenset(("installed", "fail", "autopilot", "autofail", "removed", "
                       "updfail", "swap"))
 
 
+MACHINE_CLEANED = ("removed: our ReShade Vulkan layer from the all-users "
+                   "list (no Vulkan install left)")
+
+
+def _machine_cleanup() -> bool:
+    """Run as administrator with no Vulkan install left: take off the
+    all-users Vulkan layer an earlier uninstall had no right to remove.
+    True when it did. Never a reason the window does not open."""
+    try:
+        from .. import vulkan
+        if vulkan.cleanup_machine(prefs.vulkan_games_or_none()):
+            log.write(MACHINE_CLEANED)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -49,6 +67,7 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
         self.update_url: str | None = None
         self.update_ready: Path | None = None
         self._crash_shown = False
+        cleaned = _machine_cleanup()
         self._library_init()
         self._game_init()
         self._video_init()
@@ -69,6 +88,14 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
         self.vr_page = VrPage(self.shell, self)
         self.shell.add(self.vr_page)
         self._open_start()
+        # The person was told "start this tool once as administrator and it
+        # takes it off": say that it did.
+        if cleaned:
+            try:
+                self.shell.status(MACHINE_CLEANED)
+                self.write(MACHINE_CLEANED, "ok")     # the status line moves on
+            except Exception:
+                pass
         self.watch_refresh()
         root.after(60, self._pump)
         self.check_update()
@@ -211,8 +238,7 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
 
         Works with no game picked - the 1.9 window read the picked game's
         install folder outside any guard and raised from the help menu."""
-        from urllib.parse import quote
-        from .. import diagnose, installer, reportui
+        from .. import diagnose, installer, reportout, reportui
         try:
             name, sm = gpu.detect()
         except Exception:
@@ -252,18 +278,54 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
             crash=self._last_crash if g is not None else None)
         App._reprint_answered(self, g, route, answers)
         try:
-            url = f"{REPO_URL}/issues/new?title={quote(title)}&body={quote(body)}"
-            if len(url) > 7800:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(body)
-                url = (f"{REPO_URL}/issues/new?title={quote(title)}&body="
-                       + quote("(the details are on your clipboard - paste them here)"))
-            webbrowser.open(url)
+            url, cut = diagnose.issue_url(REPO_URL, title, body)
         except Exception:
+            url, cut = f"{REPO_URL}/issues/new", True
+        done = reportout.deliver(body, url, cut, lambda s: App._to_clipboard(self, s), webbrowser.open,
+                                 g.name if g is not None else "",
+                                 link=lambda ok: diagnose.issue_url(REPO_URL, title, body, pasted=ok))
+        App._report_banner(self, done.text, body, install_dir, g.name if g is not None else "")
+
+    def _to_clipboard(self, text: str) -> bool:
+        """Put the text on the clipboard and read it back: "it is on your
+        clipboard" is only said when it is."""
+        try:
             self.root.clipboard_clear()
-            self.root.clipboard_append(body)
-            self.shell.info("report a bug", "The details are on the clipboard - paste them into a new issue on "
-                                            "GitHub.")
+            self.root.clipboard_append(text)
+            # no update(): it ran every pending event inside the report
+            # handler; Tk reads its own selection back without it
+            got = self.root.clipboard_get()
+        except Exception:
+            return False
+        return got.replace("\r\n", "\n") == text.replace("\r\n", "\n")
+
+    def _report_banner(self, text: str, body: str, install_dir, name: str, extra=()) -> None:
+        """What happened to the report, in one line, with the two things that
+        can still be done: copy it again, or save it with its logs as a zip."""
+        from .. import reportout
+
+        def copy() -> None:
+            self.shell.status("the report is on your clipboard" if App._to_clipboard(self, body)
+                              else "the clipboard did not take the report - use 'save zip'")
+
+        def zipit() -> None:
+            p = reportout.save_zip(body, install_dir, name)
+            if p is None:
+                self.shell.status("the zip could not be written - 'copy report' still works")
+                return
+            App._report_banner(self, f"saved {p.name} - attach it to the issue", body, install_dir, name,
+                               extra=[("show it", lambda: App._show_file(p), True)])
+
+        actions = list(extra) + [("copy report", copy, False), ("save zip", zipit, False)]
+        self.shell.banner("report", text, actions=actions, colour=T.AMBER)
+
+    @staticmethod
+    def _show_file(p) -> None:
+        import subprocess
+        try:
+            subprocess.Popen(["explorer", "/select,", str(p)])
+        except OSError:
+            pass
 
     def _reprint_answered(self, g, route: str, answers) -> None:
         """What the report now says, on the screen and the card as well.
@@ -404,6 +466,12 @@ class App(LibraryControl, GameControl, VideoControl, WatchControl, DlssControl):
         self._restart_into(exe)
 
     def _restart_into(self, exe) -> None:
+        # The restart ends the process without the close handler, so the
+        # window's place is written down here (#641).
+        try:
+            self.shell.remember_window()
+        except Exception:
+            pass
         try:
             selfupdate.apply_and_restart(exe)
         except (selfupdate.UpdateError, OSError) as e:

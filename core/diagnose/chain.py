@@ -31,6 +31,40 @@ __all__ = [
     "_explain_no_log", "analyse"
 ]
 
+def _other_standalone(install_dir: Path) -> list[str]:
+    """Every other folder this tool installed the standalone route into.
+
+    Its log is one file in %LOCALAPPDATA% for all of them, so it is only
+    evidence about this folder when there is no other (the replay patches
+    this: the reporter's PC is not the one replaying)."""
+    from .. import prefs as _prefs
+    here = os.path.normcase(str(install_dir))
+    out = []
+    try:
+        for d in _prefs.installs():
+            if os.path.normcase(str(d)) != here and \
+                    str((_manifest(Path(d)) or {}).get("path") or "") == "standalone":
+                out.append(str(d))
+    except Exception:
+        return ["?"]
+    return out
+
+
+def _standalone_ran_here(install_dir: Path, since: float) -> bool:
+    """The standalone add-on's own log holds a session after this install,
+    and no other folder could have written it."""
+    sa = model.STANDALONE_LOG
+    try:
+        if not (since and sa.is_file() and _fresh(sa, since)):
+            return False
+    except OSError:
+        return False
+    if _other_standalone(install_dir):
+        return False
+    return _STANDALONE_SESSION in _tail(sa, TAIL_STANDALONE) \
+        or "contract ready:" in _tail(sa, TAIL_STANDALONE)
+
+
 def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                     stale_reshade: bool) -> Report:
     """No current log: read the folder instead and name the likeliest cause.
@@ -176,6 +210,29 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
         from .. import wincrash as _wc
         exe_name = str(man.get("exe") or "")
         flags = _wc.start_flags(install_dir / exe_name) if exe_name else ""
+        # ...and none of that is the reason once a ReShade layer is on the
+        # machine's list, which an elevated process does read (2.0.9, #562):
+        # blaming the start then repeats advice that was already followed.
+        try:
+            from .. import vulkan as _vk2
+            _reaches = bool(_vk2.reaches_elevated(bits == 64))
+        except Exception:
+            _reaches = False
+        if _reaches:
+            rep.add(BAD, "DXVK ran, and ReShade did not.",
+                    f"{dxvk_logs[0]} was written since the install, so the "
+                    f"{app} was started and DXVK loaded - but ReShade writes "
+                    f"ReShade.log the moment it loads, and there is none. A "
+                    f"ReShade layer the {app} can load is registered for "
+                    f"this user and on the machine's list, the one a program "
+                    f"started as administrator reads, so how the {app} is "
+                    f"started is unlikely to be the reason. Press 'report a bug' under "
+                    f"help: a {bits}-bit layer that is registered in both "
+                    f"places and does not load is worth knowing about.")
+            rep.verdict = ("DXVK ran and ReShade did not, with ReShade's "
+                           "layer registered for elevated programs too - "
+                           "report it.")
+            return rep
         if _wc.runs_as_admin(flags):
             rep.add(BAD, f"{exe_name} is set to run as administrator "
                          f"({flags}).",
@@ -186,7 +243,11 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                     f"which is where ReShade's layer is. Right-click "
                     f"{exe_name} -> Properties -> Compatibility, untick 'Run "
                     f"this program as an administrator' (also under 'Change "
-                    f"settings for all users'), then start the {app} again.")
+                    f"settings for all users'), then start the {app} again. "
+                    f"Or leave it ticked, start this tool as administrator "
+                    f"and install again: the layer then goes on the "
+                    f"machine's list as well, which an elevated program "
+                    f"does read.")
             rep.verdict = (f"{exe_name} runs as administrator, so ReShade's "
                            f"Vulkan layer is skipped - untick 'Run as "
                            f"administrator' on the exe.")
@@ -204,11 +265,18 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
                 + f". An elevated process does not get the Vulkan layers "
                 f"registered per user, which is where ReShade's is. Start "
                 f"the {app} the way you normally do, not as administrator. "
+                f"When that is not on offer - the {app} asks for "
+                f"administrator rights itself, or Windows runs with UAC off "
+                f"and starts everything that way - install again with "
+                f"this tool running as administrator: it then puts the "
+                f"layer on the machine's list too, the one an elevated "
+                f"program does read. "
                 f"If there is still no ReShade.log, say so in an issue with "
                 f"this report - a {bits}-bit layer that registers and does "
                 f"not load is worth knowing about.")
         rep.verdict = (f"DXVK ran and ReShade did not - if anything starts "
-                       f"the {app} as administrator, start it normally.")
+                       f"the {app} as administrator, start it normally, or "
+                       f"install again with this tool run as administrator.")
         return rep
 
     # Did the game itself run? Its own files answer that, and the answer
@@ -341,6 +409,26 @@ def _explain_no_log(install_dir: Path, man: dict, rep: Report,
     return rep
 
 
+# Names our own add-ons and their helpers write in brackets in ReShade.log.
+_OUR_VOICES = ("dlss 5 neural rendering", "dlss5 nr pre-upscale", "renodx",
+               "mfg unlock", "dlss 5 feed", "bridge", "neural-upstream")
+
+
+def _addon_voices(rtext: str, route: str = "") -> list[str]:
+    """Add-ons that wrote "| WARN | [Name] ..." lines and are not ours."""
+    out: list[str] = []
+    for m in re.finditer(r"\| (?:INFO|WARN|ERROR|DEBUG) *\| \[([^\]\n]{2,60})\] ",
+                         rtext or ""):
+        name = m.group(1).strip()
+        low = name.lower()
+        if any(o in low for o in _OUR_VOICES) or _standalone_named(name) \
+                or (route == "uplift" and low == "uplift") \
+                or _upstream_named(name) or name in out:
+            continue
+        out.append(name)
+    return out
+
+
 def _foreign_reshade(install_dir: Path, since: float, rep: Report,
                      foreign: list) -> None:
     """Name the DLSS hooks a ReShade loaded on a route that installs none.
@@ -366,7 +454,7 @@ def _foreign_reshade(install_dir: Path, since: float, rep: Report,
     # it is, so it is named for what it is; only the install record's
     # "replaced a previous" note says it was this tool's (gate 2.0.5).
     ours = [n for n in hooks if any(_route_owns(n, r) for r in (
-        "feeder", "bridge", "native", "renodx", "upstream", "standalone"))]
+        "feeder", "bridge", "native", "renodx", "upstream", "standalone", "uplift"))]
     theirs = [n for n in hooks if n not in ours]
     foreign[:] = theirs
     if theirs:
@@ -647,6 +735,25 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                 "and greyed-out frame-gen multipliers are the usual result. "
                 "Try one at a time.")
 
+    if not (text or rtext or htext) and rep.route == "standalone" \
+            and _standalone_ran_here(install_dir, since):
+        # No ReShade.log, and the add-on that only ReShade loads wrote a
+        # session after this install: ReShade ran here and could not write
+        # its own log (#744 - four minutes of NR=Success read as "not
+        # started since the install").
+        rep.ran = True
+        try:
+            at = datetime.fromtimestamp(model.STANDALONE_LOG.stat().st_mtime).strftime("%d %b %H:%M")
+        except OSError:
+            at = ""
+        rep.add(WARN, "ReShade ran here and left no ReShade.log.",
+                f"The standalone add-on, which only ReShade loads, wrote its own "
+                f"log{' at ' + at if at else ''}, after this install. ReShade "
+                f"writes ReShade.log beside the game, so most likely the game "
+                f"cannot write to this folder - one known case is a folder only "
+                f"an administrator can write to (Program Files outside a Steam "
+                f"library) with the game started normally.")
+        return _analyse_standalone(rep, since, True, install_dir, man)
     if not (text or rtext or htext):
         return _explain_no_log(install_dir, man, rep, stale_reshade)
 
@@ -704,12 +811,16 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
             want = UPSTREAM_ADDON_NAME
         elif rep.route == "standalone":
             want = STANDALONE_ADDON_NAME
+        elif rep.route == "uplift":
+            want = UPLIFT_ADDON_NAME
         else:
             want = NATIVE_ADDON_NAME
         if rep.route == "upstream":
             ours = [n for n in loaded if _upstream_named(n)]
         elif rep.route == "standalone":
             ours = [n for n in loaded if _standalone_named(n)]
+        elif rep.route == "uplift":
+            ours = [n for n in loaded if "uplift" in n.lower()]
         else:
             ours = [n for n in loaded if n.strip().lower() == want.lower()]
         # The feed log names the add-on it found; that counts as loaded too
@@ -718,6 +829,14 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
             ours = [want]
         others = [n for n in loaded if n not in ours and "Feed" not in n
                   and "Bridge" not in n]
+        # An add-on also speaks in ReShade.log under its own name in
+        # brackets. #944's excerpt was sixteen "[Prey Luma]" warnings and no
+        # "Registered add-on" line, and the report never named the Luma mod
+        # that was running beside ours. A name that speaks is loaded.
+        registered = list(others)
+        for v in _addon_voices(rtext, rep.route):
+            if v not in loaded and v not in others:
+                others.append(v)
         # "Beside ours" only when ours is in the session: with it missing,
         # "did not load" below is the answer and this would bury it.
         if ours or any("Feed" in n for n in loaded):
@@ -727,7 +846,7 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # where nothing else would notice.
         if loaded and not ours and rep.route != "optiscaler"                 and not any("Feed" in n for n in loaded):
             rep.add(BAD, f"The '{want}' add-on did not load.",
-                    "ReShade registered " + (", ".join(others) if others else
+                    "ReShade registered " + (", ".join(registered) if registered else
                     "nothing else") + " but not the DLSS 5 add-on this route "
                     "needs. Check the .addon64 is still in the folder "
                     "(antivirus), then reinstall.")
@@ -781,7 +900,7 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
             if plain:
                 rep.add(WARN, "Other ReShade add-ons are loaded: " + ", ".join(plain),
                         "They share the swap chain with the DLSS 5 add-on. If the "
-                        "picture flickers or nothing happens, move their .addon64 "
+                        "picture flickers or nothing happens, move their add-on "
                         "files out of the folder and test with ours alone.")
         # Two builds of one add-on in the same launch. ReShade loads every
         # .addon64 in the folder, so a copy left behind under another name -
@@ -979,7 +1098,7 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                         "game's settings and install again.")
         _shader_failures(rtext, provider_tech, rep)
         if "untested build" in rtext:
-            rep.add(WARN, "The add-on flagged your nvngx_dlssnr as an untested build.",
+            rep.add(WARN, "The add-on flagged your nvngx_dlssnr as a build it does not list.",
                     "It accepted it, but failures may be specific to that file.")
         if "focus window is the desktop window" in rtext:
             rep.add(INFO, "ReShade skipped a device whose window is the desktop.",
@@ -1157,6 +1276,9 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
     # to the "confirm it in the overlay" answer below.
     if rep.route == "upstream" and "[NRPRE]" in rtext:
         return _analyse_upstream(rep, rtext)
+    # GITC-Uplift says in ReShade.log what it is doing (#946).
+    if rep.route == "uplift" and "Uplift" in rtext:
+        return _analyse_uplift(rep, rtext)
 
     # --- the decisive part, from whichever log has it --------------------
     joined = "\n".join(x for x in (text, htext, rtext) if x)
@@ -1230,8 +1352,12 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                 "Motion) and start it again: where a game draws with Vulkan, "
                 "this combination has been reported to take it down.")
 
-    rec = re.search(r"### CRASH RECORDED ###\s+exception (0x[0-9A-Fa-f]+)[^\n]*?"
-                    r"last doing: ([^\n]+)", joined)
+    # Feeder 1.19 prints "### EXCEPTION RECORDED ###  exception 0x.. (reading
+    # address ..) at .. in <module path>; this add-on was last doing: .."
+    # where it used to print CRASH RECORDED with a stack line (#562: a crash
+    # inside the game's own PepegaScript.asi read "no effect runtime").
+    rec = re.search(r"### (?:CRASH|EXCEPTION) RECORDED ###\s+exception "
+                    r"(0x[0-9A-Fa-f]+)[^\n]*?last doing: ([^\n]+)", joined)
     if rec:
         dump = re.search(r"crash dump written: ([^\n]+?)\s+--", joined)
         where = (f" and the dump ({dump.group(1).strip()}; zip it, it shrinks "
@@ -1239,6 +1365,12 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
         # Whose crash is it? The feeder's handler catches every crash in the
         # process, its own and the game's alike, and prints the module chain.
         chain = _fault_chain(joined, "crash")
+        if not chain:
+            # No stack line: the new shape names the faulting module only.
+            _at = re.search(r"### (?:CRASH|EXCEPTION) RECORDED ###[^\n]*?"
+                            r" at [0-9A-Fa-f]+ in ([^;\n]+?);", joined)
+            if _at:
+                chain = [re.split(r"[\\/]", _at.group(1).strip())[-1]]
         inner = chain[0] if chain else ""
         mine = [c for c in chain if _in(c, _OURS_IN_STACK)]
         pacer_note = (" The feed also measured an external frame pacer on "
@@ -1262,6 +1394,26 @@ def _analyse(install_dir: Path, last_error: str, foreign: list) -> Report:
                     "here and confirm the game is stable on its own.")
             rep.verdict = ("The crash is in the game's own code - no add-on "
                            "in the stack.")
+        elif (chain and not mine and not _in(inner, _NGX_IN_STACK)
+              and inner.lower().endswith(".asi")
+              and not any(Path(str(f)).name.lower() == inner.lower()
+                          for f in (man.get("files") or []))):
+            # The faulting file is not one this install wrote, not NVIDIA's
+            # runtime and not the game: a mod or hook another program put in
+            # the folder. "no feed work has run" says it fell before ours.
+            _early = "nothing yet" in rec.group(2)
+            rep.add(BAD, f"The crash ({rec.group(1)}) is inside {inner}, a "
+                         f"file this tool did not install.",
+                    "The feed's own handler recorded it"
+                    + (" before the feeder had done any work, so the fault is "
+                       "in that file's own code. " if _early else ". ")
+                    + ("An .asi file is a plugin loaded into the game by a "
+                       "mod loader. " if inner.lower().endswith(".asi") else "")
+                    + "Take " + inner + " (or the mod that owns it) out of "
+                    "the game's folder, start the game once, and put it back "
+                    "only if the crash stays away." + pacer_note + where)
+            rep.verdict = (f"The crash is in {inner}, not in this install - "
+                           f"take that file out and try again.")
         elif chain and _in(inner, _NGX_IN_STACK):
             _m = man or {}
             _sa = _dlss_mod().standalone_fits(str(_m.get("api") or ""),

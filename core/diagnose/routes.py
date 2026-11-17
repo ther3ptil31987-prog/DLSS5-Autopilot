@@ -23,6 +23,7 @@ from .process import _loaded_note
 
 __all__ = [
     "_analyse_optiscaler", "_analyse_remix", "_analyse_standalone", "_analyse_upstream",
+    "_analyse_uplift",
     "_check_inputs", "_last_run", "_opti_checklist", "_overlay_key",
     "_section"
 ]
@@ -312,6 +313,39 @@ def _analyse_optiscaler(install_dir: Path, rep: "Report", since: float,
     pres = None
     for pres in re.finditer(r"Original present result:\s*([0-9A-Fa-f]{8})", text):
         pass
+    # The same failed result AFTER the model drew is not a refusal: the
+    # swapchain was accepted, and a later Present failed - Ready or Not on a
+    # window change, in Streamline's frame-generation present (#768). #58
+    # never drew, so it keeps the verdict below.
+    pres_line = text.count("\n", 0, pres.start()) if pres else -1
+    # Only when nothing drew after it: one failed Present in a session that
+    # kept drawing is not where the session ended (gate 2.0.9).
+    if pres and not pres.group(1).startswith("0") and running \
+            and running[-1][0] < pres_line:
+        code = pres.group(1).upper()
+        fg_present = any("dlfgPresent" in ln and "present failed" in ln.lower()
+                         for ln in lines)
+        rep.add(OK, "Neural rendering ran.", running[-1][1].strip()[-160:])
+        rep.add(BAD, f"Later a Present failed (0x{code})"
+                     + (" in the game's frame generation." if fg_present else "."),
+                # 887A0005/6/7: the device was removed, hung or reset - the
+                # driver's side, not a window change (#89's shape)
+                "The model had been drawing, and then the graphics device was "
+                "lost (removed, hung or reset). That is the driver or the card "
+                "giving up - a driver update or a lower load (a lower model "
+                "resolution, frame generation off) is where to start."
+                if code in ("887A0005", "887A0006", "887A0007") else
+                "The model had been drawing, so the swapchain was accepted; the "
+                "failure came later. A window or mode change (alt-tab, "
+                "fullscreen to windowed, a resolution change) is the usual "
+                "moment. One at a time: turn the game's DLSS Frame Generation "
+                "off, put back the game's own nvngx_dlssg.dll with 'restore "
+                "original' on the dlss page if it was swapped, and play in "
+                "borderless.")
+        rep.verdict = ("Neural rendering ran; a Present failed later"
+                       + (" in the game's frame generation" if fg_present else "")
+                       + " - see below.")
+        return rep
     if pres and not pres.group(1).startswith("0"):
         rep.add(BAD, "The game refused the swapchain OptiScaler wrapped "
                      f"(0x{pres.group(1).upper()}).",
@@ -687,6 +721,71 @@ def _analyse_remix(install_dir: Path, rep: "Report", since: float,
             f"runtime does not know the option - install again, or use the "
             f"'swap the Remix runtime' option.")
     rep.verdict = "Remix ran; the neural pass was never even attempted."
+    return rep
+
+
+def _analyse_uplift(rep: Report, rtext: str) -> Report:
+    """GITC-Uplift's own lines in ReShade.log ([Uplift] ...), worst first.
+
+    The words are the add-on's (read from its 1.7.0 binary). Whether NR is
+    switched on is a tick in its tab, so a session that never ran NR is
+    'set up', not a failure."""
+    def line(pat: str):
+        m = None
+        for m in re.finditer(pat, rtext):
+            pass
+        return m
+
+    reg = line(r"Uplift (\S+)( \(32-bit\))? registered")
+    if reg:
+        rep.add(OK, f"GITC-Uplift {reg.group(1)}{' (32-bit)' if reg.group(2) else ''} loaded.")
+    other = line(r"\[Uplift\] (?:warning: |error: |trace: )?([^\n]+?) is loaded and runs NR too")
+    if other:
+        who = other.group(1).strip()
+        rep.add(BAD, f"GITC-Uplift refuses to run beside {who}.",
+                "It runs the network itself and stands down when another "
+                "neural add-on is loaded. Move that add-on out of the game's "
+                "folder, or install the route it belongs to instead.")
+        rep.verdict = f"GITC-Uplift refuses to run beside {who} - move it out of the folder."
+        return rep
+    if line(r"NVIDIA's DLSS loaded nvngx_dlssnr\.dll from the game's folder"):
+        rep.add(BAD, "The game's DLSS loaded the nvngx_dlssnr.dll beside the "
+                     "executable first, and GITC-Uplift cannot use that copy.",
+                "On RTX 50 NVIDIA's DLSS loads it from the game's folder. "
+                "Install again: the install moves that file aside and puts "
+                "the runtime in the GITC-Uplift folder.")
+        rep.verdict = ("The game's DLSS loaded an nvngx_dlssnr.dll from beside the "
+                       "executable - install again, which moves it aside.")
+        return rep
+    if line(r"nvngx_dlssnr\.dll not found next to"):
+        rep.add(BAD, "GITC-Uplift found no nvngx_dlssnr.dll.",
+                "The install puts it in the GITC-Uplift folder beside the "
+                "add-on; it is not there. Install again.")
+        rep.verdict = "GITC-Uplift found no nvngx_dlssnr.dll - install again."
+        return rep
+    helper = line(r"Uplift's 64-bit helper (?:could not start|stopped|did not answer)[^\n]*")
+    start = line(r"Uplift could not start on this [^\n]*")
+    ran = line(r"NR ran on the game's frame \(([^)\n]*)\)")
+    if ran:
+        rep.add(OK, f"NR ran on the game's frame ({ran.group(1)}).")
+        rep.verdict = "Working."
+        return rep
+    if helper or start:
+        what = (helper or start).group(0).strip()
+        rep.add(BAD, what + ".",
+                "GITC-Uplift's own words. Its tab in ReShade has a Retry "
+                "button; ReShade.log has the details under [Uplift].")
+        rep.verdict = ("GITC-Uplift's helper did not run - see its tab in ReShade."
+                       if helper else
+                       "GITC-Uplift could not start on the game's device - see its "
+                       "tab in ReShade.")
+        return rep
+    if reg:
+        rep.verdict = ("Loaded and set up; no neural frame yet - open the GITC "
+                       "Uplift tab in ReShade and tick Enable.")
+        return rep
+    rep.verdict = ("Inconclusive - open the overlay and check the GITC Uplift "
+                   "tab: its card says whether NR is running.")
     return rep
 
 

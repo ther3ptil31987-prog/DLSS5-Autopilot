@@ -22,6 +22,8 @@ from __future__ import annotations
 # about one verdict.
 CHAIN = (
     ("1 the install stopped", "us", (
+        # RTX 50 loads a runtime beside the exe first; the install moves it
+        "loaded an nvngx_dlssnr.dll from beside the executable",
         "The install never finished",
         "The install crashed",
         "The install stopped",
@@ -41,6 +43,7 @@ CHAIN = (
         "The release installed here was not an OptiScaler build",
     )),
     ("2 a file went missing after it", "the person's antivirus", (
+        "GITC-Uplift found no nvngx_dlssnr.dll",
         "is missing from the folder - reinstall",      # ReShade's proxy, DXVK
         "ReShade's Vulkan layer is not registered",
         "ReShade Vulkan layer is not registered",
@@ -63,16 +66,23 @@ CHAIN = (
         "Not run yet, or the Remix runtime never",
         "It looks as though it ran and nothing this install wrote was loaded",
         "and no log was written - ReShade's Vulkan layer is not reaching the game",
+        # #740: a native Vulkan install, and nothing of it in the process
+        "and ReShade's Vulkan layer did not reach it - nothing of this install",
         "and no log was written - the proxy is reached and ReShade is not",
         # 2.0.5: how Windows started the game kept the per-user layer out
         # (#400, #348, #238), and an engine a DXGI proxy never reaches (#403)
         "runs as administrator, so ReShade's Vulkan layer is skipped",
         "not DXGI - 'full rescan', then install again",
+        # #682: the running game held another renderer and no DXGI at all
+        "loaded and no DirectX 10/11/12 when the tool looked",
+        "had only DirectDraw loaded when the tool looked",
         # #479: the game drew with D3D9 on an install set up for D3D11/12
         "ReShade found a Direct3D 9 device, not the D3D11/12",
         "on a renderer this tool cannot reach",
         # the watcher saw another executable run (was unmapped until 2.0.8)
         ", and the install went beside",
+        # #850 #874: the process held no graphics DLL at all - a starter
+        "looked like a starter (no graphics DLL loaded)",
         # 2.0.8, #577: the OptiScaler route's proxy was never loaded
         "was not loaded in it - try another 'loads as' name",
     )),
@@ -84,6 +94,8 @@ CHAIN = (
     ("5 loaded, the feed never got going", "upstream", (
         # 2.0.7: DLSS was called and the bridge's log has no frame
         "The game called DLSS and the bridge delivered no frame",
+        # #862: the game made no DLSS call and the bridge has nothing to take over
+        "The bridge counted no DLSS call and delivered no frame",
         "Inconclusive - the feed did not get far enough",
         "Inconclusive - the add-on attached but built nothing",
         "It started and closed during start-up",
@@ -102,7 +114,8 @@ CHAIN = (
         # ("The game never called DLSS" before 2.0.6 - see RETIRED)
         "The game made no D3D12 DLSS call",
         # 2.0.7: the bridge attached and its log has no frame line
-        "The bridge attached and delivered no frame - turn DLSS on",
+        # ("- turn DLSS on" before #637 - see RETIRED)
+        "The bridge attached and delivered no frame - its log shows no DLSS",
         # #127: the bridge replaced the settings the install wrote
         "The bridge's substitute is off",
         "OptiScaler loaded; neural rendering not switched on",
@@ -114,6 +127,8 @@ CHAIN = (
     ("7 loaded, and we cannot see", "us", (
         # 2.0.8: the watcher saw OptiScaler's proxy loaded and no log came
         "and no log was written.",
+        # #787: ReShade's add-on in the process, and no log in the folder
+        "and wrote no log here - most likely it cannot write",
         "Inconclusive - open the overlay",
         "Add-ons loaded. Confirm in",
         "Add-ons loaded and the switch is on",
@@ -139,10 +154,14 @@ CHAIN = (
         "The game never started with this install in",
     )),
     ("8 the add-on crashed", "upstream", (
+        "GITC-Uplift's helper did not run",
+        "GITC-Uplift could not start on the game's device",
         "The feed crashed after starting",
         # #482: the feeder's own wait for its 64-bit helper ran out
         "The feed stopped waiting for the 64-bit helper",
         "The crash is in the",
+        # #562: a file of somebody else's (an .asi mod) took the process down
+        "not in this install - take that file out",
         "The 64-bit helper lost its graphics device",
         "its neural add-on never created the DLSS 5 feature",
         "the add-on crashed creating the feature",
@@ -151,7 +170,14 @@ CHAIN = (
         "It started, then the bridge stopped",
         "The bridge stopped before it delivered a frame",
         "It started, then the game crashed - see below",
+        # the window's crash correction (ctl_game.crash_overrides) and the
+        # report's own (diagnose.answered, #749): it drew, then a fault
+        "It ran, and then the game crashed - Windows recorded",
+        # #748: ReShade loaded, the add-on's log had nothing, and a fault
+        "and the game crashed before the add-on got going",
         "The game crashed before the bridge delivered a frame",
+        # #768: the model drew, and a later Present failed (a window change)
+        "Neural rendering ran; a Present failed later",
         # #420, #20: Streamline's crash handler wrote a dump on this route
         "The game crashed with OptiScaler loaded",
     )),
@@ -173,6 +199,7 @@ CHAIN = (
     # names; only the replaced "we cannot see" verdicts land here (#250).
     ("11 a second DLSS hook beside ours", "the person", (
         "Another DLSS hook was loaded beside ours",
+        "GITC-Uplift refuses to run beside",
         # #439: the bridge route's own add-on under its 1.0.x name
         "An older bridge add-on was loaded beside ours",
         # #348: a ReShade d3d9.dll found before DXVK's
@@ -202,15 +229,24 @@ NOT_A_ROUTE = (
     "runs as administrator, so ReShade's Vulkan layer is skipped",
     "not DXGI - 'full rescan', then install again",
     "on a renderer this tool cannot reach",
+    "loaded and no DirectX 10/11/12 when the tool looked",
+    "had only DirectDraw loaded when the tool looked",
     # #479: a D3D9 device on an install set up for D3D11/12 - the next route
     # goes in with the same wrong API (gate 2.0.6)
     "ReShade found a Direct3D 9 device, not the D3D11/12",
     # The game ran from another executable or folder: the next route would
     # go in beside the same one that does not start (gate 2.0.8)
     ", and the install went beside",
+    # A starter holds nothing the next route would reach either (#850 #874),
+    # and somebody else's file that crashed the game stays there on any route
+    "looked like a starter (no graphics DLL loaded)",
+    "not in this install - take that file out",
     # A proxy name the game does not load: the fix is another name on the
     # same route (gate 2.0.8)
     "try another 'loads as' name",
+    # #787: ReShade ran and wrote nothing - the next route writes into the
+    # same folder (gate 2.0.9 round 3)
+    "and wrote no log here - most likely it cannot write",
 )
 
 _SECOND_HOOK = "another dlss hook was loaded beside ours"
@@ -221,6 +257,8 @@ _SECOND_HOOK = "another dlss hook was loaded beside ours"
 # stage; CHAIN holds only what the tool prints today (the gate checks it).
 RETIRED = (
     ("6 set up, not switched on", "The game never called DLSS"),     # 2.0.5, #390
+    ("6 set up, not switched on",
+     "The bridge attached and delivered no frame - turn DLSS on"),   # 2.0.8, #637
 )
 
 
