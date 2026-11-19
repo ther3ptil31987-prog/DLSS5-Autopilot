@@ -3,7 +3,7 @@
   "DX11/dlss": {
    "bridge": {
     "failed": 3,
-    "worked": 13
+    "worked": 14
    },
    "optiscaler": {
     "failed": 0,
@@ -51,7 +51,7 @@
    },
    "renodx": {
     "failed": 1,
-    "worked": 14
+    "worked": 15
    },
    "standalone": {
     "failed": 0,
@@ -341,7 +341,7 @@
   "617.14": {
    "bridge": {
     "failed": 6,
-    "worked": 2
+    "worked": 3
    },
    "feeder": {
     "failed": 8,
@@ -463,6 +463,10 @@
    },
    "optiscaler": {
     "failed": 1,
+    "worked": 1
+   },
+   "renodx": {
+    "failed": 0,
     "worked": 1
    },
    "standalone": {
@@ -1928,6 +1932,10 @@
      "failed": 0,
      "worked": 1
     },
+    "617.14": {
+     "failed": 0,
+     "worked": 1
+    },
     "621.14": {
      "failed": 0,
      "worked": 1
@@ -1940,11 +1948,11 @@
      "res": 75
     }
    },
-   "name": "Dead Space",
+   "name": "Dead Space Remake",
    "routes": {
     "bridge": {
      "failed": 0,
-     "worked": 1
+     "worked": 2
     },
     "optiscaler": {
      "failed": 0,
@@ -3101,6 +3109,10 @@
     "621.01": {
      "failed": 1,
      "worked": 2
+    },
+    "621.24": {
+     "failed": 0,
+     "worked": 1
     }
    },
    "measured": {
@@ -3118,7 +3130,7 @@
     },
     "renodx": {
      "failed": 0,
-     "worked": 1
+     "worked": 2
     }
    }
   },
@@ -6912,6 +6924,6 @@
    }
   }
  },
- "generated": "2026-11-18T13:01:52Z",
- "reports": 702
+ "generated": "2026-11-19T13:05:13Z",
+ "reports": 704
 }
