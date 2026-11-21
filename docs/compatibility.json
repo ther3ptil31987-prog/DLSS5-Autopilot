@@ -8,6 +8,10 @@
    "optiscaler": {
     "failed": 0,
     "worked": 5
+   },
+   "renodx": {
+    "failed": 0,
+    "worked": 1
    }
   },
   "DX11/none": {
@@ -29,7 +33,7 @@
    },
    "uplift": {
     "failed": 0,
-    "worked": 1
+    "worked": 2
    }
   },
   "DX12/dlss": {
@@ -46,8 +50,8 @@
     "worked": 3
    },
    "optiscaler": {
-    "failed": 35,
-    "worked": 171
+    "failed": 37,
+    "worked": 176
    },
    "renodx": {
     "failed": 1,
@@ -62,7 +66,7 @@
     "worked": 2
    },
    "upstream": {
-    "failed": 5,
+    "failed": 6,
     "worked": 9
    }
   },
@@ -383,11 +387,19 @@
    },
    "renodx": {
     "failed": 4,
-    "worked": 13
+    "worked": 14
    },
    "standalone": {
     "failed": 6,
     "worked": 7
+   },
+   "uplift": {
+    "failed": 0,
+    "worked": 1
+   },
+   "upstream": {
+    "failed": 1,
+    "worked": 0
    }
   },
   "617.70": {
@@ -406,8 +418,8 @@
     "worked": 4
    },
    "optiscaler": {
-    "failed": 5,
-    "worked": 30
+    "failed": 6,
+    "worked": 34
    },
    "renodx": {
     "failed": 1,
@@ -462,8 +474,8 @@
     "worked": 2
    },
    "optiscaler": {
-    "failed": 1,
-    "worked": 1
+    "failed": 2,
+    "worked": 2
    },
    "renodx": {
     "failed": 0,
@@ -1751,8 +1763,8 @@
      "worked": 4
     },
     "621.01": {
-     "failed": 0,
-     "worked": 4
+     "failed": 1,
+     "worked": 5
     }
    },
    "measured": {
@@ -1762,11 +1774,11 @@
      "res": 75
     }
    },
-   "name": "Cyberpunk 2077 - EP1",
+   "name": "Cyberpunk 2077",
    "routes": {
     "optiscaler": {
-     "failed": 3,
-     "worked": 20
+     "failed": 4,
+     "worked": 21
     },
     "upstream": {
      "failed": 0,
@@ -2892,11 +2904,19 @@
     "617.14": {
      "failed": 0,
      "worked": 1
+    },
+    "617.42": {
+     "failed": 0,
+     "worked": 1
     }
    },
-   "name": "FINAL FANTASY X/X-2 HD Remaster",
+   "name": "Final Fantasy X and X-2 HD Remaster",
    "routes": {
     "feeder": {
+     "failed": 0,
+     "worked": 1
+    },
+    "uplift": {
      "failed": 0,
      "worked": 1
     }
@@ -4794,6 +4814,10 @@
     "616.92": {
      "failed": 0,
      "worked": 1
+    },
+    "617.42": {
+     "failed": 1,
+     "worked": 1
     }
    },
    "name": "PCSX2 (PlayStation 2)",
@@ -4801,6 +4825,14 @@
     "feeder": {
      "failed": 0,
      "worked": 1
+    },
+    "renodx": {
+     "failed": 0,
+     "worked": 1
+    },
+    "upstream": {
+     "failed": 1,
+     "worked": 0
     }
    }
   },
@@ -5025,6 +5057,10 @@
     "621.14": {
      "failed": 0,
      "worked": 1
+    },
+    "621.24": {
+     "failed": 1,
+     "worked": 0
     }
    },
    "name": "Red Dead Redemption 2",
@@ -5034,7 +5070,7 @@
      "worked": 0
     },
     "optiscaler": {
-     "failed": 2,
+     "failed": 3,
      "worked": 8
     },
     "renodx": {
@@ -5175,12 +5211,16 @@
     "617.42": {
      "failed": 0,
      "worked": 1
+    },
+    "621.01": {
+     "failed": 0,
+     "worked": 2
     }
    },
    "measured": {
     "optiscaler": {
-     "ms": 7.8,
-     "n": 2,
+     "ms": 6.08,
+     "n": 4,
      "res": 75
     }
    },
@@ -5188,7 +5228,7 @@
    "routes": {
     "optiscaler": {
      "failed": 1,
-     "worked": 4
+     "worked": 6
     }
    }
   },
@@ -5317,6 +5357,28 @@
     "optiscaler": {
      "failed": 0,
      "worked": 2
+    }
+   }
+  },
+  "returnal-win64-shipping.exe": {
+   "drivers": {
+    "621.24": {
+     "failed": 0,
+     "worked": 1
+    }
+   },
+   "measured": {
+    "optiscaler": {
+     "ms": 3.91,
+     "n": 1,
+     "res": 75
+    }
+   },
+   "name": "Returnal\u2122",
+   "routes": {
+    "optiscaler": {
+     "failed": 0,
+     "worked": 1
     }
    }
   },
@@ -6233,6 +6295,28 @@
     }
    }
   },
+  "thebackroomslt-win64-shipping.exe": {
+   "drivers": {
+    "621.01": {
+     "failed": 0,
+     "worked": 1
+    }
+   },
+   "measured": {
+    "optiscaler": {
+     "ms": 6.05,
+     "n": 1,
+     "res": 75
+    }
+   },
+   "name": "The Backrooms: Lost Tape",
+   "routes": {
+    "optiscaler": {
+     "failed": 0,
+     "worked": 1
+    }
+   }
+  },
   "thecomplex.exe": {
    "drivers": {
     "617.42": {
@@ -6928,6 +7012,6 @@
    }
   }
  },
- "generated": "2026-11-20T12:53:32Z",
- "reports": 705
+ "generated": "2026-11-21T14:35:07Z",
+ "reports": 715
 }
