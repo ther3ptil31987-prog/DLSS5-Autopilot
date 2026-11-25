@@ -29,7 +29,7 @@
    },
    "standalone": {
     "failed": 5,
-    "worked": 17
+    "worked": 18
    },
    "uplift": {
     "failed": 0,
@@ -50,8 +50,8 @@
     "worked": 3
    },
    "optiscaler": {
-    "failed": 37,
-    "worked": 177
+    "failed": 38,
+    "worked": 178
    },
    "renodx": {
     "failed": 1,
@@ -260,7 +260,7 @@
     "worked": 2
    },
    "optiscaler": {
-    "failed": 7,
+    "failed": 8,
     "worked": 33
    },
    "remix": {
@@ -484,6 +484,16 @@
    "standalone": {
     "failed": 1,
     "worked": 0
+   }
+  },
+  "621.40": {
+   "optiscaler": {
+    "failed": 0,
+    "worked": 1
+   },
+   "standalone": {
+    "failed": 0,
+    "worked": 1
    }
   },
   "630.20": {
@@ -1856,12 +1866,16 @@
     "621.01": {
      "failed": 1,
      "worked": 1
+    },
+    "621.40": {
+     "failed": 0,
+     "worked": 1
     }
    },
    "measured": {
     "optiscaler": {
-     "ms": 4.91,
-     "n": 5,
+     "ms": 5.75,
+     "n": 6,
      "res": 75
     }
    },
@@ -1873,7 +1887,7 @@
     },
     "optiscaler": {
      "failed": 0,
-     "worked": 12
+     "worked": 13
     },
     "renodx": {
      "failed": 1,
@@ -3331,15 +3345,19 @@
   },
   "gowde-steam.exe": {
    "drivers": {
+    "616.56": {
+     "failed": 1,
+     "worked": 0
+    },
     "617.14": {
      "failed": 1,
      "worked": 0
     }
    },
-   "name": "Gears of War Reloaded 2025",
+   "name": "Gears.of.War.Reloaded-InsaneRamZes",
    "routes": {
     "optiscaler": {
-     "failed": 1,
+     "failed": 2,
      "worked": 0
     }
    }
@@ -5722,6 +5740,10 @@
     "617.42": {
      "failed": 0,
      "worked": 1
+    },
+    "621.40": {
+     "failed": 0,
+     "worked": 1
     }
    },
    "measured": {
@@ -5731,7 +5753,7 @@
      "res": 100
     }
    },
-   "name": "The Elder Scrolls V: Skyrim Special Edition",
+   "name": "Skyrim Anniversary Edition",
    "routes": {
     "feeder": {
      "failed": 1,
@@ -5739,7 +5761,7 @@
     },
     "standalone": {
      "failed": 0,
-     "worked": 1
+     "worked": 2
     }
    }
   },
@@ -7020,6 +7042,6 @@
    }
   }
  },
- "generated": "2026-11-24T14:51:57Z",
- "reports": 717
+ "generated": "2026-11-25T16:01:02Z",
+ "reports": 720
 }
